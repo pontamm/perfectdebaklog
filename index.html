@@ -74,11 +74,6 @@
         }
 
         window.onload = () => {
-            if (gasUrl === "YOUR_WEB_APP_URL") {
-                document.getElementById("status").innerText = "GASのURLを設定してください！";
-                return;
-            }
-
             // Googleの壁（CORS）を完全に回避するため、読み込みはバックグラウンド（no-cors）で試みる
             // 失敗しても画面をフリーズさせずに強制進行する安全設計
             fetch(gasUrl + "?action=read", { method: "GET", mode: "cors", redirect: "follow" })
