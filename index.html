@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GPSナビ付き記録システム</title>
+    <title>GPSナビ付き記録システム（診断モード）</title>
     
     <!-- 地図ライブラリを読み込み -->
     <link rel="stylesheet" href="https://cloudflare.com" />
@@ -12,12 +12,12 @@
     <style>
         body { font-family: sans-serif; margin: 0; padding: 15px; text-align: center; background: #f3f4f6; color: #333; }
         h2 { margin: 5px 0 10px 0; color: #111; font-size: 20px; }
-        #map { height: 280px; width: 100%; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); box-sizing: border-box; background: #ddd; }
+        /* 🚨 診断エラー用の目立つ赤い枠 */
+        #error-log { display: none; background: #fee2e2; border: 2px dashed #ef4444; color: #b91c1c; padding: 15px; margin-bottom: 15px; border-radius: 8px; text-align: left; font-size: 13px; white-space: pre-wrap; font-family: monospace; }
+        #map { height: 250px; width: 100%; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); box-sizing: border-box; background: #ddd; }
         .card { background: white; padding: 12px; border-radius: 12px; margin-bottom: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); text-align: left; }
         .card-title { font-weight: bold; margin-bottom: 5px; color: #4b5563; font-size: 13px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
-        #alert-area { display: none; background: #fee2e2; border: 2px solid #ef4444; border-radius: 12px; padding: 15px; margin-bottom: 15px; text-align: left; animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
-        .alert-title { font-size: 16px; font-weight: bold; color: #b91c1c; margin-bottom: 5px; }
+        #alert-area { display: none; background: #fee2e2; border: 2px solid #ef4444; border-radius: 12px; padding: 15px; margin-bottom: 15px; text-align: left; }
         input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
         .btn-container { display: flex; justify-content: center; gap: 10px; margin-top: 5px; }
         button { flex: 1; padding: 15px; font-size: 18px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; color: white; }
@@ -30,14 +30,16 @@
 
     <h2>GPSナビ＆活動記録</h2>
 
+    <!-- 🚨 エラーが発生した時に原因をここに書き出す -->
+    <div id="error-log">ここに診断エラーが表示されます</div>
+
     <!-- 移動に合わせて自動スクロールする地図 -->
-    <div id="map">🗺️ 地図を準備中（GPS信号を待っています）...</div>
+    <div id="map">🗺️ 地図を表示中...</div>
 
     <!-- 1. 【自動出現】過去のデータ接近アラート -->
     <div id="alert-area">
-        <div class="alert-title">⚠️ 過去の記録場所に接近中！</div>
+        <div style="font-size: 16px; font-weight: bold; color: #b91c1c; margin-bottom: 5px;">⚠️ 過去の記録場所に接近中！</div>
         <div id="past-data-display" style="font-size: 14px; margin-bottom: 10px; line-height: 1.4;"></div>
-        
         <div class="card-title" style="border-bottom: 1px solid #fca5a5; color: #991b1b;">📝 今回の情報を入力</div>
         <input type="text" id="comment" placeholder="今回のコメントを入力（任意）">
         <div class="btn-container">
@@ -56,114 +58,104 @@
 
     <script>
         // ★【重要】ここにあなたのGASのウェブアプリURLを貼り付けてください
-        const gasUrl = "https://script.google.com/macros/s/AKfycbx_AjTTCAvRPPEOw7cV7HtvIlApOBqj4nHkKXSloPSOMTVfFw-MucVXt-wnJ5oXyLVV/exec"; 
+        const gasUrl = "https://script.google.com/macros/s/AKfycby6GloPaGgA7KPaXMkx6B62ARTIolb12K_VxCbe38SnjPECHlKM8uKi3KuzLPN8JSJ8tQ/exec"; 
 
         let map;
         let currentMarker;
         let pastRecords = [];
-        const TARGET_DISTANCE = 25; // 接近検知距離（メートル）
+        const TARGET_DISTANCE = 25;
+
+        // 診断用エラー表示関数
+        function printError(title, errorObj) {
+            const errLog = document.getElementById("error-log");
+            errLog.style.display = "block";
+            errLog.innerText = `【🚨 診断結果: ${title}】\n` + 
+                               `メッセージ: ${errorObj.message || errorObj}\n` + 
+                               `発生時刻: ${new Date().toLocaleTimeString()}\n\n` +
+                               `※現在の設定URL: ${gasUrl}`;
+        }
 
         function getDistance(lat1, lng1, lat2, lng2) {
             const rad = x => x * Math.PI / 180;
-            const rx = 6378137.0;
-            const ry = 6356752.314245;
-            const dy = rad(lat1 - lat2);
-            const dx = rad(lng1 - lng2);
+            const rx = 6378137.0; const ry = 6356752.314245;
+            const dy = rad(lat1 - lat2); const dx = rad(lng1 - lng2);
             const my = rad((lat1 + lat2) / 2);
             const e2 = (rx*rx - ry*ry) / (rx*rx);
             const w = Math.sqrt(1 - e2 * Math.sin(my) * Math.sin(my));
-            const m = rx * (1 - e2) / (w*w*w);
-            const n = rx / w;
+            const m = rx * (1 - e2) / (w*w*w); const n = rx / w;
             return Math.sqrt(Math.pow(dy*m, 2) + Math.pow(dx*n*Math.cos(my), 2));
         }
 
         window.onload = () => {
             if (gasUrl === "YOUR_WEB_APP_URL") {
-                document.getElementById("status").style.color = "#ef4444";
-                document.getElementById("status").innerText = "GASのURLを設定してください！";
+                printError("設定不備", "コード内のYOUR_WEB_APP_URLが書き換わっていません。");
                 return;
             }
             
-            // 最初に位置情報を取得して地図を初期化
-            navigator.geolocation.getCurrentPosition((pos) => {
-                const lat = pos.coords.latitude;
-                const lng = pos.coords.longitude;
-                
-                map = L.map('map').setView([lat, lng], 17);
+            // GPSを待たずに、まずは仮の場所（東京駅）で地図と過去ピンを強制表示する安全設計
+            try {
+                map = L.map('map').setView([35.6812, 139.7671], 11);
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-                currentMarker = L.marker([lat, lng]).addTo(map).bindPopup("<b>現在地</b>").openPopup();
-                document.getElementById('map').style.background = "none";
-                
-                // 過去データの読み込み（CORS・フリーズ完全対策版）
-                fetch(gasUrl + "?action=read", { method: "GET", redirect: "follow" })
-                    .then(res => res.json())
-                    .then(data => {
-                        // 万が一データが空（配列でない）場合の安全ガード
-                        if (!Array.isArray(data)) {
-                            data = [];
+                currentMarker = L.marker([35.6812, 139.7671]).addTo(map).bindPopup("<b>GPSを探しています...</b>").openPopup();
+            } catch(e) {
+                printError("地図ライブラリの読み込み失敗", e);
+            }
+
+            // 過去データの読み込み（エラー捕捉機能をさらに強化）
+            const requestUrl = gasUrl + "?action=read";
+            fetch(requestUrl, { method: "GET", redirect: "follow" })
+                .then(res => {
+                    if (!res.ok) throw new Error(`Googleサーバーがエラーを返しました (ステータスコード: ${res.status})`);
+                    return res.json();
+                })
+                .then(data => {
+                    if (!Array.isArray(data)) throw new Error("届いたデータがリスト（配列）の形式になっていません。");
+
+                    data.forEach(record => {
+                        if (record && !isNaN(record.lat) && !isNaN(record.lng) && record.lat !== 0) {
+                            pastRecords.push(record);
+                            let displayDate = "不明";
+                            try { if(record.dateTime) displayDate = new Date(record.dateTime).toLocaleDateString('ja-JP'); } catch(e) {}
+                            L.marker([record.lat, record.lng]).addTo(map).bindPopup(`<b>過去の記録</b><br>日付: ${displayDate}<br>結果: ${record.status || 'なし'}`);
                         }
-
-                        // エラーが起きる可能性のある行を1件ずつ安全にチェックして取り込む
-                        data.forEach(record => {
-                            // 緯度と経度が正しい数字のデータのみを処理（フリーズ対策）
-                            if (record && !isNaN(record.lat) && !isNaN(record.lng) && record.lat !== 0) {
-                                pastRecords.push(record);
-
-                                // 日付の変換でクラッシュしないように安全に処理
-                                let displayDate = "不明";
-                                try {
-                                    if(record.dateTime) displayDate = new Date(record.dateTime).toLocaleDateString('ja-JP');
-                                } catch(e) {}
-
-                                // ピンを地図に立てる
-                                L.marker([record.lat, record.lng])
-                                 .addTo(map)
-                                 .bindPopup(`<b>過去の記録</b><br>日付: ${displayDate}<br>結果: ${record.status || 'なし'}<br>メモ: ${record.comment || 'なし'}`);
-                            }
-                        });
-
-                        document.getElementById("nearby-status").innerText = "周辺の過去データを " + pastRecords.length + " 件表示しました。歩いてみてください。";
-                        startTracking();
-                    })
-                    .catch((err) => {
-                        // 通信が失敗しても地図のスクロール追跡だけは強制的に動かす安全設計
-                        document.getElementById("nearby-status").innerText = "データの読み込みをスキップしました。そのまま移動できます。";
-                        startTracking();
                     });
-            }, () => {
-                document.getElementById('map').innerText = "GPSを許可してください。";
-            });
+
+                    document.getElementById("nearby-status").innerText = "周辺の過去データを " + pastRecords.length + " 件表示しました。";
+                    startTracking();
+                })
+                .catch((err) => {
+                    // 通信失敗の原因を画面に直接プリントする
+                    printError("GAS（スプレッドシート）からのデータ読み込み失敗", err);
+                    document.getElementById("nearby-status").innerText = "データの読み込みに失敗したため、移動追跡のみ開始します。";
+                    startTracking();
+                });
         };
 
         function startTracking() {
+            if (!navigator.geolocation) {
+                printError("GPS機能なし", "お使いのスマホはGPSに対応していません。");
+                return;
+            }
             navigator.geolocation.watchPosition((pos) => {
                 const currentLat = pos.coords.latitude;
                 const currentLng = pos.coords.longitude;
                 
-                // 現在地に合わせて地図を自動スクロール
                 if (map) {
                     map.panTo([currentLat, currentLng]);
-                    currentMarker.setLatLng([currentLat, currentLng]);
+                    if(map.getZoom() < 15) map.setZoom(17); // 現在地を掴んだらズームイン
+                    currentMarker.setLatLng([currentLat, currentLng]).setPopupContent("<b>現在地（追従中）</b>");
                 }
                 
-                let closeHouse = null;
-                let minDistance = Infinity;
-
+                let closeHouse = null; let minDistance = Infinity;
                 pastRecords.forEach(record => {
                     const dist = getDistance(currentLat, currentLng, record.lat, record.lng);
-                    if (dist < minDistance) {
-                        minDistance = dist;
-                        closeHouse = record;
-                    }
+                    if (dist < minDistance) { minDistance = dist; closeHouse = record; }
                 });
 
                 const alertArea = document.getElementById("alert-area");
                 if (closeHouse && minDistance <= TARGET_DISTANCE) {
                     let displayDateTime = "不明";
-                    try {
-                        if(closeHouse.dateTime) displayDateTime = new Date(closeHouse.dateTime).toLocaleString('ja-JP');
-                    } catch(e) {}
-
+                    try { if(closeHouse.dateTime) displayDateTime = new Date(closeHouse.dateTime).toLocaleString('ja-JP'); } catch(e) {}
                     document.getElementById("past-data-display").innerHTML = 
                         "<b>距離:</b> 約" + Math.round(minDistance) + "m<br>" +
                         "<b>前回の訪問日:</b> " + displayDateTime + "<br>" +
@@ -176,30 +168,20 @@
                         document.getElementById("nearby-status").innerText = "一番近い記録場所まで、あと約 " + Math.round(minDistance) + "m です。";
                     }
                 }
-            }, null, { enableHighAccuracy: true });
+            }, (err) => {
+                printError("現在地（GPS）の取得失敗", err);
+            }, { enableHighAccuracy: true });
         }
 
         function sendData(statusResult) {
-            document.getElementById("status").style.color = "#10b981";
             document.getElementById("status").innerText = "データを送信中...";
             const commentValue = document.getElementById("comment").value;
-
             navigator.geolocation.getCurrentPosition((position) => {
-                const lat = position.coords.latitude;
-                const lng = position.coords.longitude;
+                const lat = position.coords.latitude; const lng = position.coords.longitude;
                 const finalUrl = gasUrl + "?lat=" + lat + "&lng=" + lng + "&status=" + encodeURIComponent(statusResult) + "&comment=" + encodeURIComponent(commentValue);
-                
-                fetch(finalUrl, { mode: 'no-cors' })
-                    .then(() => {
-                        document.getElementById("status").innerText = "✅ 保存しました！ (" + statusResult + ")";
-                        document.getElementById("comment").value = ""; 
-                        setTimeout(() => { location.reload(); }, 1200);
-                    })
-                    .catch(() => { 
-                        document.getElementById("status").style.color = "#ef4444";
-                        document.getElementById("status").innerText = "❌ 送信エラー"; 
-                    });
+                fetch(finalUrl, { mode: 'no-cors' }).then(() => { location.reload(); });
             });
         }
     </script>
 </body>
+</html>
