@@ -7,7 +7,6 @@
     <style>
         body { font-family: sans-serif; margin: 0; padding: 15px; text-align: center; background: #f3f4f6; color: #333; }
         h2 { margin: 5px 0 10px 0; color: #111; font-size: 20px; }
-        /* 100%エラーの起きないGoogleマップ枠 */
         #google-map { border: 0; display: none; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); box-sizing: border-box; }
         .card { background: white; padding: 12px; border-radius: 12px; margin-bottom: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); text-align: left; }
         .card-title { font-weight: bold; margin-bottom: 5px; color: #4b5563; font-size: 13px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
@@ -26,7 +25,7 @@
 
     <h2>GPSナビ＆活動記録</h2>
 
-    <!-- 移動に合わせて自動スクロールする本物のGoogleマップ -->
+    <!-- 自動スクロールするGoogleマップ -->
     <iframe id="google-map" src="" width="100%" height="280" allowfullscreen="" loading="lazy"></iframe>
 
     <!-- 1. 【自動出現】過去のデータ接近アラート -->
@@ -45,19 +44,18 @@
     <!-- 2. 周辺情報カード -->
     <div class="card">
         <div class="card-title">🔍 周辺のデータ状況</div>
-        <div id="nearby-status">位置情報を追跡しています...</div>
+        <div id="nearby-status">過去データを読み込んでいます...</div>
     </div>
 
     <p id="status"></p>
 
     <script>
-        // ★【重要】ここにあなたのGASのウェブアプリURLを貼り付けてください
-        const gasUrl = "https://script.google.com/macros/s/AKfycbxfpcQYpHnqgNrV36TUWbikUqYbjpAQpTuFWpiwcFType-BNA7TqcEyamyhY-6XIWNvUg/exec"; 
+        // ★【重要】ここに「新しいGASのURL」を貼り付けてください
+        const gasUrl = "https://script.google.com/macros/s/AKfycbyoYO-Y0C5vFkTfmAB5uRT2s-otVBLllbIUobILS2t_SXltKGiAZg5t_mQv1Zyugq_O/exec"; 
 
         let pastRecords = [];
         const TARGET_DISTANCE = 25; // 接近検知距離（25メートル）
 
-        // URL自動省略バグを100%回避する仕組み
         function getMapUrl(lat, lng) {
             return "https://" + "maps." + "google.com" + "/maps?q=" + lat + "," + lng + "&z=17&output=embed";
         }
@@ -73,33 +71,39 @@
             return Math.sqrt(Math.pow(dy*m, 2) + Math.pow(dx*n*Math.cos(my), 2));
         }
 
-        window.onload = () => {
-            // Googleの壁（CORS）を完全に回避するため、読み込みはバックグラウンド（no-cors）で試みる
-            // 失敗しても画面をフリーズさせずに強制進行する安全設計
-            fetch(gasUrl + "?action=read", { method: "GET", mode: "cors", redirect: "follow" })
-                .then(res => res.json())
-                .then(data => {
-                    if (Array.isArray(data)) pastRecords = data;
-                    startTracking();
-                })
-                .catch(() => {
-                    // 通信制限で弾かれても、データなしの状態で追跡機能（地図）だけは100%動かす
-                    startTracking();
-                });
-        };
+        // ★【新機能】Googleの壁を100%回避してデータを読み込む「JSONP」という特殊な関数
+        function receiveDataFromGAS(data) {
+            if (Array.isArray(data)) {
+                pastRecords = data;
+                document.getElementById("nearby-status").innerText = "周辺の過去データを " + data.length + " 件読み込みました。歩いてみてください。";
+            }
+            startTracking();
+        }
 
-        // 移動に合わせて自分を動かし、地図をスクロールする
-        function startTracking() {
-            if (!navigator.geolocation) {
-                document.getElementById("nearby-status").innerText = "GPS非対応の端末です。";
+        window.onload = () => {
+            if (gasUrl === "YOUR_WEB_APP_URL") {
+                document.getElementById("status").innerText = "GASのURLを設定してください！";
                 return;
             }
+
+            // セキュリティを無視してデータを強制的に引き抜くスクリプト埋め込み処理
+            const script = document.createElement("script");
+            script.src = gasUrl + "?action=read&callback=receiveDataFromGAS";
+            document.body.appendChild(script);
+
+            // 万が一通信が遅くても、3秒後に自動でGPS追跡だけはスタートさせる安全ガード
+            setTimeout(() => {
+                if (pastRecords.length === 0) startTracking();
+            }, 3000);
+        };
+
+        function startTracking() {
+            if (!navigator.geolocation) return;
 
             navigator.geolocation.watchPosition((pos) => {
                 const currentLat = pos.coords.latitude;
                 const currentLng = pos.coords.longitude;
                 
-                // 【完璧スクロール】現在地に合わせてGoogleマップを自動更新
                 const mapFrame = document.getElementById('google-map');
                 mapFrame.src = getMapUrl(currentLat, currentLng);
                 mapFrame.style.display = "block";
@@ -107,7 +111,6 @@
                 let closeHouse = null;
                 let minDistance = Infinity;
 
-                // 過去データがある場合のみ距離を計算
                 if (pastRecords.length > 0) {
                     pastRecords.forEach(record => {
                         const dist = getDistance(currentLat, currentLng, record.lat, record.lng);
@@ -118,7 +121,6 @@
                     });
                 }
 
-                // 接近判定
                 const alertArea = document.getElementById("alert-area");
                 if (closeHouse && minDistance <= TARGET_DISTANCE) {
                     let dateStr = "不明";
@@ -135,14 +137,11 @@
                     alertArea.style.display = "none";
                     if (pastRecords.length > 0 && closeHouse) {
                         document.getElementById("nearby-status").innerText = "一番近い過去の記録場所まで、あと約 " + Math.round(minDistance) + "m です。";
-                    } else {
-                        document.getElementById("nearby-status").innerText = "現在地を追従中。過去データは送信ボタンを押すと蓄積されます。";
                     }
                 }
             }, null, { enableHighAccuracy: true });
         }
 
-        // 送信処理
         function sendData(statusResult) {
             document.getElementById("status").innerText = "データを送信中...";
             const commentValue = document.getElementById("comment").value;
@@ -164,3 +163,4 @@
     </script>
 </body>
 </html>
+
